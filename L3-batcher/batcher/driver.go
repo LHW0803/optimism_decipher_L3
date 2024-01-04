@@ -32,9 +32,16 @@ type L2Client interface {
 	BlockByNumber(ctx context.Context, number *big.Int) (*types.Block, error)
 }
 
+type L3Client interface {
+	BlockByNumber(ctx context.Context, number *big.Int) (*types.Block, error)
+	// 수정 필요함
+}
+
 type RollupClient interface {
 	SyncStatus(ctx context.Context) (*eth.SyncStatus, error)
 }
+
+// L3Client에 대한 인터페이스를 구현하고, 아래 DriverSetup에 L2 Client를 포함
 
 // DriverSetup is the collection of input/output interfaces and configuration that the driver operates on.
 type DriverSetup struct {
@@ -44,6 +51,7 @@ type DriverSetup struct {
 	Config           BatcherConfig
 	Txmgr            txmgr.TxManager
 	L1Client         L1Client
+	L2Client		 L2Client // L2Client를 추가
 	EndpointProvider dial.L2EndpointProvider
 	ChannelConfig    ChannelConfig
 }
@@ -66,6 +74,11 @@ type BatchSubmitter struct {
 	// lastStoredBlock is the last block loaded into `state`. If it is empty it should be set to the l2 safe head.
 	lastStoredBlock eth.BlockID
 	lastL1Tip       eth.L1BlockRef
+
+	// 위 역할을 하는 l2를 위한 포함 요소 추가
+	// op.BlockID와 op.L2BlockRef는 구현된 함수가 아닌 가상의 함수
+	lastStoredBlockInL2 op.BlockID
+	lastL2Tip           op.L2BlockRef
 
 	state *channelManager
 }
@@ -212,6 +225,11 @@ func (l *BatchSubmitter) calculateL2BlockRangeToStore(ctx context.Context) (eth.
 		return eth.BlockID{}, eth.BlockID{}, fmt.Errorf("getting rollup client: %w", err)
 	}
 	syncStatus, err := rollupClient.SyncStatus(ctx)
+	/* todo
+	syncStatus를 받아올 때, 기존 safe, unsafe 말고
+	L3에서 사용하는 unsafe, safeInL2, safeInL1을 반환해주도록
+	SyncStatus 함수를 수정해줘야 함
+	*/
 	// Ensure that we have the sync status
 	if err != nil {
 		return eth.BlockID{}, eth.BlockID{}, fmt.Errorf("failed to get sync status: %w", err)
@@ -235,6 +253,11 @@ func (l *BatchSubmitter) calculateL2BlockRangeToStore(ctx context.Context) (eth.
 		return eth.BlockID{}, eth.BlockID{}, errors.New("L2 safe head ahead of L2 unsafe head")
 	}
 
+	if(L2Status == 1) {
+		return syncStatus.SafeInL1.ID(), syncStatus.UnsafeL2.ID(), nil
+		// SafeInL1이 된 마지막 블록 다음부터를 싱크할 블록으로 설정함
+	}
+
 	return l.lastStoredBlock, syncStatus.UnsafeL2.ID(), nil
 }
 
@@ -249,12 +272,22 @@ func (l *BatchSubmitter) calculateL2BlockRangeToStore(ctx context.Context) (eth.
 // Submitted batch, but it is not valid
 // Missed L2 block somehow.
 
+/* todo
+1. L2가 멈춘 것을 감지 -> loop 시작 부분에 정상 상태 / L2 장애 상태로 case를 나누어 변수에 할당
+2. L2가 멈춘 것이 확인 -> SWS 동안의 데이터를 L1으로 올려주는 코드
+3. L2가 복구 -> L2로 제출 위치 다시 변경
+*/
 func (l *BatchSubmitter) loop() {
 	defer l.wg.Done()
 
 	ticker := time.NewTicker(l.Config.PollInterval)
 	defer ticker.Stop()
+	/*
+	todo: 1. L2가 멈춘 것을 감지를 구현하는 수도코드를 loop 아래의 getL2Status() 함수에 구현
 
+	L2가 멈춘 것을 감지하는 함수, getL2Status() 라고 가정, 정상이면 0, 멈췄으면 1 리턴한다고 가정
+	L2Status := getStatus()
+	*/
 	receiptsCh := make(chan txmgr.TxReceipt[txData])
 	queue := txmgr.NewQueue[txData](l.killCtx, l.Txmgr, l.Config.MaxPendingTransactions)
 
@@ -262,6 +295,7 @@ func (l *BatchSubmitter) loop() {
 		select {
 		case <-ticker.C:
 			if err := l.loadBlocksIntoState(l.shutdownCtx); errors.Is(err, ErrReorg) {
+				// 위 함수에 대해 l2가 멈춘 상황에 대한 코드를 수정함
 				err := l.state.Close()
 				if err != nil {
 					if errors.Is(err, ErrPendingAfterClose) {
@@ -294,6 +328,11 @@ func (l *BatchSubmitter) loop() {
 		}
 	}
 }
+
+/* todo 위에 언급된 L2 상태를 확인하는 함수를 구현
+func getL2Status() {
+}
+*/
 
 // publishStateToL1 loops through the block data loaded into `state` and
 // submits the associated data to the L1 in the form of channel frames.
@@ -332,12 +371,35 @@ func (l *BatchSubmitter) publishStateToL1(queue *txmgr.Queue[txData], receiptsCh
 // publishTxToL1 submits a single state tx to the L1
 func (l *BatchSubmitter) publishTxToL1(ctx context.Context, queue *txmgr.Queue[txData], receiptsCh chan txmgr.TxReceipt[txData]) error {
 	// send all available transactions
+	// L2Status의 값에 따라 해당 체인을 설정
+
+	/* 기존 코드
 	l1tip, err := l.l1Tip(ctx)
 	if err != nil {
 		l.Log.Error("Failed to query L1 tip", "err", err)
 		return err
 	}
 	l.recordL1Tip(l1tip)
+	*/
+
+	// 수정한 코드, 변수 이름은 그대로 둠
+	if(L2Status == 0) {
+		l1tip, err := l.l2Tip(ctx) // l2Tip 함수는 l1Tip 함수 아래에 추가로 구현함
+		if err != nil {
+			l.Log.Error("Failed to query L2 tip", "err", err)
+			return err
+		}
+		l.recordL1Tip(l1tip)
+	}
+	else {
+		// 기존 코드와 같이 L1과 상호작용
+		l1tip, err := l.l1Tip(ctx)
+		if err != nil {
+			l.Log.Error("Failed to query L1 tip", "err", err)
+			return err
+		}
+		l.recordL1Tip(l1tip)
+	}
 
 	// Collect next transaction data
 	txdata, err := l.state.TxData(l1tip.ID())
@@ -359,18 +421,47 @@ func (l *BatchSubmitter) publishTxToL1(ctx context.Context, queue *txmgr.Queue[t
 func (l *BatchSubmitter) sendTransaction(txdata txData, queue *txmgr.Queue[txData], receiptsCh chan txmgr.TxReceipt[txData]) {
 	// Do the gas estimation offline. A value of 0 will cause the [txmgr] to estimate the gas limit.
 	data := txdata.Bytes()
-	intrinsicGas, err := core.IntrinsicGas(data, nil, false, true, true, false)
-	if err != nil {
-		l.Log.Error("Failed to calculate intrinsic gas", "err", err)
-		return
+	if(L2Status == 0) {
+		intrinsicGas, err := core_op.IntrinsicGas(data, nil, false, true, true, false)
+		// 기존 코드는 import한 core를 이용 -> 아직 구현하지 않은 core_op로 op 가스비 가져온다고 가정함
+		if err != nil {
+			l.Log.Error("Failed to calculate intrinsic gas", "err", err)
+			return
+		}
+		candidate := txmgr.TxCandidate{
+			To:       &l.RollupConfig.BatchInboxAddress,
+			// BatchInboxAddress에는 L2 batchInboxAddress가 저장되어 있을 것임
+			TxData:   data,
+			GasLimit: intrinsicGas,
+		}
 	}
+	else {
+		intrinsicGas, err := core.IntrinsicGas(data, nil, false, true, true, false)
+		if err != nil {
+			l.Log.Error("Failed to calculate intrinsic gas", "err", err)
+			return
+		}
+		candidate := txmgr.TxCandidate{
+			To:       &l.RollupConfig.BatchInboxAddressL1,
+			// BatchInboxAddressL1라는 변수를 RollupConfig에 추가하여 설정해야 함
+			// 역추적하다가 어디서 정의되는지 못찾겠어서 나중에..
+			TxData:   data,
+			GasLimit: intrinsicGas,
+		}
+	}
+	// L2가 멈춘 경우 기존 코드 그대로 L1 가스비 이용
 
+	/*
 	candidate := txmgr.TxCandidate{
 		To:       &l.RollupConfig.BatchInboxAddress,
 		TxData:   data,
 		GasLimit: intrinsicGas,
 	}
+	*/
+	// 위 코드를 if문 안에 집어 넣음
+
 	queue.Send(txdata, candidate, receiptsCh)
+	// Send에서 사용하는 RPC url을 L1 / L2에 따라서 할당해줘야 할텐데 이걸 어디서 설정해주는지 못찾겠음
 }
 
 func (l *BatchSubmitter) handleReceipt(r txmgr.TxReceipt[txData]) {
@@ -409,6 +500,17 @@ func (l *BatchSubmitter) l1Tip(ctx context.Context) (eth.L1BlockRef, error) {
 	head, err := l.L1Client.HeaderByNumber(tctx, nil)
 	if err != nil {
 		return eth.L1BlockRef{}, fmt.Errorf("getting latest L1 block: %w", err)
+	}
+	return eth.InfoToL1BlockRef(eth.HeaderBlockInfo(head)), nil
+}
+
+// 위의 l1Tip과 l2에서 같은 기능을 수행하는 l2Tip 함수
+func (l *BatchSubmitter) l2Tip(ctx context.Context) (eth.L2BlockRef, error) {
+	tctx, cancel := context.WithTimeout(ctx, l.Config.NetworkTimeout)
+	defer cancel()
+	head, err := l.L1Client.HeaderByNumber(tctx, nil)
+	if err != nil {
+		return eth.L1BlockRef{}, fmt.Errorf("getting latest L2 block: %w", err)
 	}
 	return eth.InfoToL1BlockRef(eth.HeaderBlockInfo(head)), nil
 }

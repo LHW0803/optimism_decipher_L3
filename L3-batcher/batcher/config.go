@@ -21,10 +21,14 @@ type CLIConfig struct {
 	// L1EthRpc is the HTTP provider URL for L1.
 	L1EthRpc string
 
-	// L2EthRpc is the HTTP provider URL for the L2 execution engine. A comma-separated list enables the active L2 provider. Such a list needs to match the number of RollupRpcs provided.
+	// L2EthRpc is the HTTP provider URL for L2
 	L2EthRpc string
 
+	// L3EthRpc is the HTTP provider URL for the L3 execution engine. A comma-separated list enables the active L3 provider. Such a list needs to match the number of RollupRpcs provided.
+	L3EthRpc string
+
 	// RollupRpc is the HTTP provider URL for the L2 rollup node. A comma-separated list enables the active L2 provider. Such a list needs to match the number of L2EthRpcs provided.
+	// L2가 아닌 L3 롤업 노드의 URL이 필요
 	RollupRpc string
 
 	// MaxChannelDuration is the maximum duration (in #L1-blocks) to keep a
@@ -72,6 +76,10 @@ func (c *CLIConfig) Check() error {
 	if c.L2EthRpc == "" {
 		return errors.New("empty L2 RPC URL")
 	}
+	if c.L3EthRpc == "" {
+		return errors.New("empty L3 RPC URL")
+	}
+	// L3 엔드포인트 조건 추가
 	if c.RollupRpc == "" {
 		return errors.New("empty rollup RPC URL")
 	}
@@ -109,6 +117,8 @@ func NewConfig(ctx *cli.Context) *CLIConfig {
 		/* Required Flags */
 		L1EthRpc:        ctx.String(flags.L1EthRpcFlag.Name),
 		L2EthRpc:        ctx.String(flags.L2EthRpcFlag.Name),
+		L3EthRpc:        ctx.String(flags.L3EthRpcFlag.Name),
+		// L3 조건 추가
 		RollupRpc:       ctx.String(flags.RollupRpcFlag.Name),
 		SubSafetyMargin: ctx.Uint64(flags.SubSafetyMarginFlag.Name),
 		PollInterval:    ctx.Duration(flags.PollIntervalFlag.Name),

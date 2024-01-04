@@ -17,6 +17,8 @@ func validBatcherConfig() batcher.CLIConfig {
 	return batcher.CLIConfig{
 		L1EthRpc:               "fake",
 		L2EthRpc:               "fake",
+		L3EthRpc:               "fake",
+		//L3 조건 추가
 		RollupRpc:              "fake",
 		MaxChannelDuration:     0,
 		SubSafetyMargin:        0,
@@ -55,6 +57,12 @@ func TestBatcherConfig(t *testing.T) {
 			override:  func(c *batcher.CLIConfig) { c.L2EthRpc = "" },
 			errString: "empty L2 RPC URL",
 		},
+		{
+			name:      "empty L3",
+			override:  func(c *batcher.CLIConfig) { c.L3EthRpc = "" },
+			errString: "empty L3 RPC URL",
+		},
+		// L3 조건 추가
 		{
 			name:      "empty rollup",
 			override:  func(c *batcher.CLIConfig) { c.RollupRpc = "" },
