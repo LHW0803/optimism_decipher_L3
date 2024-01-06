@@ -329,10 +329,20 @@ func (l *BatchSubmitter) loop() {
 	}
 }
 
-/* todo 위에 언급된 L2 상태를 확인하는 함수를 구현
+// todo 위에 언급된 L2 상태를 확인하는 함수를 구현
 func getL2Status() {
+	// block derivation 코드를 이용하자
+	// op-node / rollup / derive / l1_traversal.go 코드를 이용
+	AdvancedL1Block(ctx context.Context);
+	// 이걸로 다음 l1 블록의 header 정보를 읽어옴 + L1 reorg 여부를 파악
+	// 다음 L1 블록의 receipt를 가져온 후 UpdateSystemConfigWithL1Receipts 함수를 통해 L1 system configuration을 업데이트하고, 이어서 블록의 Header를 L1Traversal 구조체에 업데이트
+
+	// 그 후 L1 Retrieval 코드를 이용하자 (사실 호출 순서는 L1 retrieval -> L1 trieval)
+	// op-node / rollup / derive / l1_retrieval.go
+	NextData(ctx context.Context);
+	// 블록 header 정보가 존재한다면, dataSrc의 OpenData 메소드를 호출하여 context, Next L1 block ID, batcher contract address를 받아와 블록 header 정보를 읽고 그 안에서 batcher transaction 데이터를 추출
 }
-*/
+
 
 // publishStateToL1 loops through the block data loaded into `state` and
 // submits the associated data to the L1 in the form of channel frames.
